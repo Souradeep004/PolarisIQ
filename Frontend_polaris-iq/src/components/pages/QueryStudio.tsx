@@ -9,6 +9,11 @@ import { cn } from '../../lib/utils';
 import { sendQuery, sendToolQuery, fetchTables } from '../../services/api';
 import type { QueryResponse, TableInfo } from '../../types/api';
 import ImageLightbox from '../ui/ImageLightbox';
+import ReactMarkdown from 'react-markdown';
+import remarkMath from 'remark-math';
+import rehypeKatex from 'rehype-katex';
+import katex from 'katex';
+import 'katex/dist/katex.min.css';
 
 interface ChatMessage {
     id: string;
@@ -378,9 +383,42 @@ const QueryStudio = () => {
                                                 ? "bg-primary/15 border border-primary/25 rounded-br-md text-slate-200"
                                                 : msg.role === 'error'
                                                     ? "bg-rose-500/10 border border-rose-500/20 rounded-tl-none text-rose-300"
-                                                    : "bg-slate-800/40 border border-slate-700/30 rounded-tl-none text-slate-300 whitespace-pre-wrap break-words"
+                                                    : "bg-slate-800/40 border border-slate-700/30 rounded-tl-none text-slate-300 whitespace-pre-wrap break-words prose prose-invert prose-sm max-w-none prose-p:leading-relaxed prose-pre:bg-slate-900/50"
                                         )}>
-                                            {msg.content}
+                                            {msg.role === 'assistant' ? (
+                                                <ReactMarkdown
+                                                    remarkPlugins={[remarkMath]}
+                                                    rehypePlugins={[rehypeKatex]}
+                                                    components={{
+                                                        code(props: any) {
+                                                            const { node, className, children, ...rest } = props;
+                                                            const str = String(children).replace(/\n$/, '');
+                                                            // Detect if the code block is actually LaTeX math wrapped in backticks
+                                                            const isMath = str.includes('\\text{') || str.includes('\\frac') || str.includes('\\beta') || str.includes('\\times') || str.includes('\\cdot') || str.includes('^') || className?.includes('language-latex') || className?.includes('language-math');
+                                                            
+                                                            if (isMath) {
+                                                                try {
+                                                                    const isBlock = String(children).includes('\\n') || className;
+                                                                    return (
+                                                                        <span 
+                                                                            dangerouslySetInnerHTML={{ 
+                                                                                __html: katex.renderToString(str, { throwOnError: false, displayMode: !!isBlock }) 
+                                                                            }} 
+                                                                        />
+                                                                    );
+                                                                } catch (e) {
+                                                                    // Fallback to normal code if KaTeX fails completely
+                                                                }
+                                                            }
+                                                            return <code className={className} {...rest}>{children}</code>;
+                                                        }
+                                                    }}
+                                                >
+                                                    {msg.content}
+                                                </ReactMarkdown>
+                                            ) : (
+                                                msg.content
+                                            )}
                                         </div>
 
                                         {/* Image thumbnail */}
