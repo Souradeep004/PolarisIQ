@@ -19,6 +19,12 @@ REQUIRED_LIBRARIES = [
     "diskcache",
     "fastapi",
     "matplotlib",
+    "requests",
+    "fastapi",
+    "uvicorn",
+    "statsmodels",
+    "numexpr",
+    "python-multipart",
 ]
 
 

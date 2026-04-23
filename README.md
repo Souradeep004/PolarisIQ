@@ -58,61 +58,23 @@ set FORCE_CMAKE=1
 pip install --upgrade llama-cpp-python
 ```
 
----
-
-## CLI Usage
-
-### Set your model path
-
-```bash
-# Option 1: Environment variable (recommended)
-set POLARISIQ_MODEL_PATH=C:\path\to\Qwen2.5-7B.Q4_K_M.gguf
-
-# Option 2: Pass --model-path flag to each command
+## Extablish Model Path
+```
+$env:POLARISIQ_MODEL_PATH = "C:\models\Qwen2.5-7B-Instruct-Q4_K_M.gguf" 
 ```
 
-### Ingest data
-
-```bash
-polarisiq ingest ./data/sales.csv --table sales
-polarisiq ingest ./data/customers.parquet --table customers
+## Initiate Python API Server
+Run on a separate shell interface
+```
+python -m uvicorn polaris_iq.api.server:app --reload --port 8000
 ```
 
-### Query your data
-
-```bash
-polarisiq query "find correlation between age and revenue" --table sales
-polarisiq query "perform linear regression with age predicting salary" --table salary_data
-polarisiq query "generate a scatter plot of age vs revenue" --table sales --tool
+## Run FrontEnd
 ```
-
-### Interactive REPL
-
-```bash
-polarisiq shell --table sales
-
-# Inside the shell:
-# > show average salary by department
-# > /tool                          (toggle visualization mode)
-# > generate a line plot of revenue vs age
-# > /table customers               (switch table)
-# > /quit
+cd Frontend_polaris-iq
+npm install
+npm run dev 
 ```
-
-### List tables
-
-```bash
-polarisiq tables
-polarisiq tables --schema sales
-```
-
-### Start the API server (for the web frontend)
-
-```bash
-polarisiq serve --port 8000
-```
-
----
 
 ## Supported Data Formats
 
