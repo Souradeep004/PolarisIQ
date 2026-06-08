@@ -1,10 +1,14 @@
 # polaris_iq/api/server.py
 
+import logging
 import os
 import tempfile
 import time
 import threading
 from pathlib import Path
+
+logging.basicConfig(level=logging.INFO, format="%(name)s | %(levelname)s | %(message)s")
+
 
 from fastapi import FastAPI, UploadFile, File, Form, HTTPException
 from fastapi.middleware.cors import CORSMiddleware

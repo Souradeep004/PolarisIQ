@@ -2,8 +2,11 @@
 
 import ast
 import json
+import logging
 import re
 from polaris_iq.planning.plan_schema import QueryPlan
+
+logger = logging.getLogger("polaris_iq.plan_generator")
 
 
 def _extract_json(text: str) -> str:
@@ -19,77 +22,137 @@ def _extract_json(text: str) -> str:
     # 2. Fall back: extract the outermost { ... } block
     start = text.find("{")
     if start != -1:
-        end = text.rfind("}")
-        if end != -1 and end > start:
-            return text[start : end + 1]
+        # Find the matching closing brace by counting depth
+        depth = 0
+        for i in range(start, len(text)):
+            if text[i] == "{":
+                depth += 1
+            elif text[i] == "}":
+                depth -= 1
+                if depth == 0:
+                    return text[start : i + 1]
+        # If we ran out of text (truncated output), try to fix it
+        # Add missing closing braces
+        truncated = text[start:]
+        truncated += "}" * depth
+        return truncated
 
     # 3. Nothing found — return as-is and let json.loads raise a clear error
     return text
 
 
+def _sanitize_json(text: str) -> str:
+    """Fix common LLM JSON quirks so standard json.loads succeeds."""
+
+    # Replace Python booleans/None with JSON equivalents
+    text = re.sub(r'\bTrue\b', 'true', text)
+    text = re.sub(r'\bFalse\b', 'false', text)
+    text = re.sub(r'\bNone\b', 'null', text)
+
+    # Remove trailing commas before } or ]
+    text = re.sub(r',\s*([}\]])', r'\1', text)
+
+    # Replace single quotes with double quotes (handles nested strings carefully)
+    # Only do this if there are no double-quoted strings already
+    if '"' not in text:
+        text = text.replace("'", '"')
+    else:
+        # Mixed quotes: try to fix single-quoted keys/values
+        # Replace single-quoted keys: 'key': -> "key":
+        text = re.sub(r"(?<=[{,\s])\s*'([^']+?)'\s*:", r' "\1":', text)
+        # Replace single-quoted string values: : 'value' -> : "value"
+        text = re.sub(r":\s*'([^']*?)'\s*(?=[,}\]])", r': "\1"', text)
+
+    return text
+
+
 def _parse_json_flexible(text: str) -> dict:
-    """Parse JSON string, falling back to ast.literal_eval for single-quoted output."""
+    """Parse JSON string, with sanitization and ast.literal_eval fallback."""
+    # First attempt: direct parse
     try:
         return json.loads(text)
     except json.JSONDecodeError:
-        try:
-            result = ast.literal_eval(text)
-            if isinstance(result, dict):
-                return result
-        except (ValueError, SyntaxError):
-            pass
-        raise
+        pass
+
+    # Second attempt: sanitize common LLM quirks and retry
+    try:
+        sanitized = _sanitize_json(text)
+        return json.loads(sanitized)
+    except json.JSONDecodeError:
+        pass
+
+    # Third attempt: ast.literal_eval for Python-dict-style output
+    try:
+        result = ast.literal_eval(text)
+        if isinstance(result, dict):
+            return result
+    except (ValueError, SyntaxError):
+        pass
+
+    raise json.JSONDecodeError(
+        f"Could not parse LLM output as JSON after sanitization",
+        text,
+        0,
+    )
+
+
+def _build_prompt(user_query: str, context: str) -> str:
+    """Build a concise prompt optimized for smaller LLMs."""
+
+    return f"""You are a JSON generator. Output ONLY a JSON object, nothing else.
+
+Pick the correct intent for the user's question and fill in the JSON.
+
+Intents: aggregation, correlation_analysis, regression_analysis, visualization
+
+Rules:
+- For aggregation: set statistics.parameters with "columns", "group_by", "aggregate" (AVG/SUM/COUNT/MIN/MAX)
+- For visualization: set execution_engine to "visualization", statistics.parameters with "x", "y", "chart_type" (scatter/line/bar/histogram/pie)
+- For correlation: set statistics.parameters with "columns" (list of 2 column names)
+- For regression: set prediction with "type": "linear_regression", parameters with "independent" and "dependent"
+
+{context}
+
+User question: {user_query}
+
+Respond with ONLY this JSON structure (fill in the values):
+{{"intent":"<intent>","data_scope":{{"tables":["<table_name>"]}},"statistics":{{"type":["<stat_type>"],"parameters":{{<params>}}}},"execution_engine":"<engine>","explanation_level":"brief"}}"""
 
 
 def generate_structured_plan(user_query: str, context: str, model) -> QueryPlan:
 
-    prompt = f"""
-You are a strict JSON compiler.
+    prompt = _build_prompt(user_query, context)
 
-Output ONLY valid JSON.
-Do NOT include explanation.
-Do NOT include markdown.
-Do NOT include backticks.
+    max_retries = 2
+    last_error = None
 
-The JSON must strictly match this schema:
-{QueryPlan.model_json_schema()}
+    for attempt in range(max_retries + 1):
+        try:
+            if attempt > 0:
+                # On retry, add a stronger nudge
+                retry_prompt = prompt + "\n\nIMPORTANT: Output ONLY valid JSON. No text before or after the JSON object."
+                raw_output = model.generate(retry_prompt, temperature=0.1, max_tokens=600)
+            else:
+                raw_output = model.generate(prompt, temperature=0.0, max_tokens=600)
 
-IMPORTANT CONSTRAINTS:
-- "intent" MUST be one of: "aggregation", "correlation_analysis", "regression_analysis", "classification", "hypothesis_test", "feature_engineering", "visualization"
-- "execution_engine" MUST be one of: "duckdb", "python_sklearn", "polars", "visualization"
-- "explanation_level" MUST be one of: "brief", "detailed", "none"
-- For aggregation, use the "statistics" field with "type" and "parameters". Parameters MUST contain "columns" (list of column names to aggregate), and optionally "group_by" (list of column names to group by) and "aggregate" (the function name, e.g. "AVG", "SUM", "COUNT", "MIN", "MAX"). You may also provide "sql" with a ready-to-run DuckDB SQL query.
-- For correlation_analysis, use "statistics" with "parameters" containing "columns" (a list of 2 column names).
-- For regression_analysis, use the "prediction" field with "type": "linear_regression" and "parameters" containing "independent" (list of column names) and "dependent" (single column name).
-- For visualization, set "intent" to "visualization" and "execution_engine" to "visualization". Use the "statistics" field with "parameters" containing "x" (column name for x-axis), "y" (column name for y-axis), and "chart_type" (one of: "scatter", "line", "bar", "histogram", "pie", "custom"). Pick the most relevant numeric columns from the dataset for x and y. If the user asks for a very complex or highly customized chart (e.g. 3D, violin, heatmap, clustered), set "chart_type": "custom" and provide a "custom_code" parameter containing a raw Python script. The script will be executed with access to `df` (pandas DataFrame of the table) and `filepath` (string path to save the plot). The script MUST end with `plt.savefig(filepath)` to save the image. Do NOT include markdown blocks in the `custom_code` string itself, just raw python.
+            logger.info(f"[Attempt {attempt+1}] LLM raw output: {raw_output[:500]}")
 
-Example for aggregation (average salary by education level):
-{{"intent":"aggregation","data_scope":{{"tables":["dummy_dataset"]}},"statistics":{{"type":["avg"],"parameters":{{"columns":["numeric_column_A"],"group_by":["category_column_B"],"aggregate":"AVG"}}}},"execution_engine":"duckdb","explanation_level":"brief"}}
+            if not raw_output or not raw_output.strip():
+                last_error = ValueError("LLM returned empty output")
+                logger.warning(f"[Attempt {attempt+1}] LLM returned empty output, retrying...")
+                continue
 
-Example for simple visualization (scatter plot):
-{{"intent":"visualization","data_scope":{{"tables":["dummy_dataset"]}},"statistics":{{"type":["scatter"],"parameters":{{"x":"numeric_column_X","y":"numeric_column_Y","chart_type":"scatter"}}}},"execution_engine":"visualization","explanation_level":"brief"}}
+            cleaned = _extract_json(raw_output)
+            logger.info(f"[Attempt {attempt+1}] Extracted JSON: {cleaned[:500]}")
 
-Example for custom visualization (custom python code):
-{{"intent":"visualization","data_scope":{{"tables":["dummy_dataset"]}},"statistics":{{"type":["custom"],"parameters":{{"chart_type":"custom","custom_code":"import seaborn as sns\\nimport matplotlib.pyplot as plt\\n\\nsns.violinplot(data=df, x='col_x', y='col_y')\\nplt.title('Custom Violin')\\nplt.savefig(filepath)\\nplt.close()"}}}},"execution_engine":"visualization","explanation_level":"brief"}}
+            parsed = _parse_json_flexible(cleaned)
+            return QueryPlan(**parsed)
 
-Example for regression:
-{{"intent":"regression_analysis","data_scope":{{"tables":["my_table"]}},"prediction":{{"type":"linear_regression","parameters":{{"independent":["col_x"],"dependent":"col_y"}}}},"execution_engine":"python_sklearn","explanation_level":"brief"}}
+        except Exception as e:
+            last_error = e
+            logger.warning(f"[Attempt {attempt+1}] Failed to parse plan: {e}")
+            if attempt < max_retries:
+                logger.info(f"Retrying... ({attempt+2}/{max_retries+1})")
 
-Context:
-{context}
-
-User Query:
-{user_query}
-
-Return JSON only.
-"""
-
-    raw_output = model.generate(prompt, temperature=0.0, max_tokens=800)
-
-    if not raw_output or not raw_output.strip():
-        raise ValueError("LLM returned empty output")
-
-    cleaned = _extract_json(raw_output)
-
-    parsed = _parse_json_flexible(cleaned)
-    return QueryPlan(**parsed)
+    # All retries exhausted
+    raise last_error

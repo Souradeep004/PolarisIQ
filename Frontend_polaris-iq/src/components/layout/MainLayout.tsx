@@ -19,8 +19,8 @@ const MainLayout = ({ children, currentPage, onNavigate }: MainLayoutProps) => {
             <div className="flex-1 flex flex-col h-full overflow-hidden relative z-0">
                 <Topbar />
 
-                <main className="flex-1 overflow-y-auto overflow-x-hidden p-6 scrollbar-hide">
-                    <div className="max-w-7xl mx-auto w-full h-full">
+                <main className="flex-1 overflow-y-auto overflow-x-hidden p-6 pb-12">
+                    <div className="max-w-7xl mx-auto w-full">
                         {children}
                     </div>
                 </main>

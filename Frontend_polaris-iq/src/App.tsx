@@ -12,11 +12,11 @@ function App() {
 
   return (
     <MainLayout currentPage={currentPage} onNavigate={setCurrentPage}>
-      {currentPage === 'home' && <HomeDashboard />}
-      {currentPage === 'query' && <QueryStudio />}
-      {currentPage === 'workspace' && <DataWorkspace />}
-      {currentPage === 'insights' && <InsightsPage />}
-      {currentPage === 'pipeline' && <PipelineMonitor />}
+      <div style={{ display: currentPage === 'home' ? 'block' : 'none' }}><HomeDashboard /></div>
+      <div style={{ display: currentPage === 'query' ? 'block' : 'none' }}><QueryStudio /></div>
+      <div style={{ display: currentPage === 'workspace' ? 'block' : 'none' }}><DataWorkspace /></div>
+      <div style={{ display: currentPage === 'insights' ? 'block' : 'none' }}><InsightsPage /></div>
+      <div style={{ display: currentPage === 'pipeline' ? 'block' : 'none' }}><PipelineMonitor /></div>
     </MainLayout>
   );
 }
